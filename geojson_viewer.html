@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基盤地図情報 建物データ ビューア</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet MarkerCluster CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            min-width: 250px;
+        }
+        
+        .control-panel h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 16px;
+        }
+        
+        .file-input {
+            margin-bottom: 10px;
+        }
+        
+        .file-input input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 2px;
+            transition: background 0.3s;
+        }
+        
+        .button:hover {
+            background: #005a87;
+        }
+        
+        .button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .info-panel {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            max-width: 300px;
+        }
+        
+        .info-panel h4 {
+            margin: 0 0 5px 0;
+            color: #333;
+            font-size: 14px;
+        }
+        
+        .info-panel p {
+            margin: 2px 0;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .loading {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 2000;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #007cba;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .layer-control {
+            margin: 5px 0;
+        }
+        
+        .layer-control label {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        
+        .layer-control input[type="checkbox"] {
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="control-panel">
+        <h3>基盤地図情報 建物データ ビューア</h3>
+        
+        <div class="file-input">
+            <input type="file" id="geojsonFile" accept=".geojson,.json" />
+        </div>
+        
+        <div class="layer-control">
+            <label>
+                <input type="checkbox" id="showBuildings" checked />
+                建物ポリゴンを表示
+            </label>
+        </div>
+        
+        <div class="layer-control">
+            <label>
+                <input type="checkbox" id="showMarkers" />
+                建物マーカーを表示
+            </label>
+        </div>
+        
+        <button class="button" onclick="clearMap()">地図をクリア</button>
+        <button class="button" onclick="fitBounds()">全体を表示</button>
+        <button class="button" onclick="toggleFullscreen()">フルスクリーン</button>
+    </div>
+    
+    <div class="info-panel">
+        <h4>情報</h4>
+        <p id="buildingCount">建物数: 0</p>
+        <p id="fileInfo">ファイル: 未選択</p>
+        <p id="mapInfo">ズーム: 10</p>
+    </div>
+    
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <div>GeoJSONファイルを読み込み中...</div>
+    </div>
+
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- Leaflet MarkerCluster JavaScript -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
+    <script>
+        // グローバル変数
+        let map;
+        let buildingLayer;
+        let markerCluster;
+        let currentGeoJSON = null;
+        
+        // 地図の初期化
+        function initMap() {
+            // 地図を作成（初期位置は東京）
+            map = L.map('map').setView([35.6762, 139.6503], 10);
+            
+            // 国土地理院のタイルレイヤーを追加
+            const gsiStandardLayer = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+                attribution: '© 国土地理院',
+                maxZoom: 18
+            });
+            
+            const gsiPaleLayer = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+                attribution: '© 国土地理院',
+                maxZoom: 18
+            });
+            
+            const gsiReliefLayer = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/relief/{z}/{x}/{y}.png', {
+                attribution: '© 国土地理院',
+                maxZoom: 15
+            });
+            
+            const gsiSeamlessPhotoLayer = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', {
+                attribution: '© 国土地理院',
+                maxZoom: 18
+            });
+            
+            // その他の地図レイヤー
+            const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            });
+            
+            // デフォルトレイヤーを追加（国土地理院標準地図）
+            gsiStandardLayer.addTo(map);
+            
+            // レイヤーコントロールを追加
+            const baseMaps = {
+                "国土地理院 標準地図": gsiStandardLayer,
+                "国土地理院 淡色地図": gsiPaleLayer,
+                "国土地理院 色別標高図": gsiReliefLayer,
+                "国土地理院 空中写真": gsiSeamlessPhotoLayer,
+                "OpenStreetMap": osmLayer
+            };
+            
+            L.control.layers(baseMaps).addTo(map);
+            
+            // マーカークラスターを初期化
+            markerCluster = L.markerClusterGroup();
+            
+            // 地図のイベントリスナー
+            map.on('zoomend', updateMapInfo);
+            map.on('moveend', updateMapInfo);
+            
+            updateMapInfo();
+        }
+        
+        // GeoJSONファイルの読み込み
+        function loadGeoJSON(file) {
+            if (!file) return;
+            
+            showLoading(true);
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const geojsonData = JSON.parse(e.target.result);
+                    currentGeoJSON = geojsonData;
+                    
+                    // 建物レイヤーをクリア
+                    if (buildingLayer) {
+                        map.removeLayer(buildingLayer);
+                    }
+                    map.removeLayer(markerCluster);
+                    markerCluster.clearLayers();
+                    
+                    // 建物ポリゴンレイヤーを作成
+                    buildingLayer = L.geoJSON(geojsonData, {
+                        style: function(feature) {
+                            return {
+                                fillColor: '#3388ff',
+                                color: '#3388ff',
+                                weight: 1,
+                                fillOpacity: 0.6,
+                                opacity: 0.8
+                            };
+                        },
+                        onEachFeature: function(feature, layer) {
+                            // ポップアップを作成
+                            const properties = feature.properties || {};
+                            let popupContent = '<b>建物情報</b><br>';
+                            
+                            for (const [key, value] of Object.entries(properties)) {
+                                popupContent += `${key}: ${value}<br>`;
+                            }
+                            
+                            layer.bindPopup(popupContent);
+                            
+                            // ツールチップを追加
+                            layer.bindTooltip('建物をクリックして詳細を表示', {
+                                permanent: false,
+                                direction: 'center',
+                                className: 'my-labels'
+                            });
+                        }
+                    });
+                    
+                    // 建物レイヤーを地図に追加
+                    if (document.getElementById('showBuildings').checked) {
+                        buildingLayer.addTo(map);
+                    }
+                    
+                    // マーカーレイヤーを作成
+                    createMarkerLayer(geojsonData);
+                    
+                    // 地図の境界を調整
+                    if (buildingLayer.getBounds().isValid()) {
+                        map.fitBounds(buildingLayer.getBounds());
+                    }
+                    
+                    // 情報を更新
+                    updateBuildingInfo(geojsonData);
+                    updateFileInfo(file.name);
+                    
+                    showLoading(false);
+                    
+                } catch (error) {
+                    console.error('GeoJSONの解析エラー:', error);
+                    alert('GeoJSONファイルの解析に失敗しました。ファイル形式を確認してください。');
+                    showLoading(false);
+                }
+            };
+            
+            reader.readAsText(file);
+        }
+        
+        // マーカーレイヤーの作成
+        function createMarkerLayer(geojsonData) {
+            geojsonData.features.forEach(function(feature) {
+                if (feature.geometry && feature.geometry.type === 'Polygon') {
+                    const coordinates = feature.geometry.coordinates[0];
+                    if (coordinates && coordinates.length > 0) {
+                        // ポリゴンの中心点を計算
+                        let latSum = 0, lonSum = 0;
+                        coordinates.forEach(function(coord) {
+                            lonSum += coord[0];
+                            latSum += coord[1];
+                        });
+                        
+                        const centerLat = latSum / coordinates.length;
+                        const centerLon = lonSum / coordinates.length;
+                        
+                        // マーカーを作成
+                        const marker = L.marker([centerLat, centerLon]);
+                        
+                        // ポップアップを作成
+                        const properties = feature.properties || {};
+                        let popupContent = '<b>建物情報</b><br>';
+                        
+                        for (const [key, value] of Object.entries(properties)) {
+                            popupContent += `${key}: ${value}<br>`;
+                        }
+                        
+                        marker.bindPopup(popupContent);
+                        markerCluster.addLayer(marker);
+                    }
+                }
+            });
+            
+            if (document.getElementById('showMarkers').checked) {
+                map.addLayer(markerCluster);
+            }
+        }
+        
+        // 建物レイヤーの表示/非表示切り替え
+        function toggleBuildings() {
+            const checkbox = document.getElementById('showBuildings');
+            if (checkbox.checked && buildingLayer) {
+                map.addLayer(buildingLayer);
+            } else if (buildingLayer) {
+                map.removeLayer(buildingLayer);
+            }
+        }
+        
+        // マーカーレイヤーの表示/非表示切り替え
+        function toggleMarkers() {
+            const checkbox = document.getElementById('showMarkers');
+            if (checkbox.checked) {
+                map.addLayer(markerCluster);
+            } else {
+                map.removeLayer(markerCluster);
+            }
+        }
+        
+        // 地図をクリア
+        function clearMap() {
+            if (buildingLayer) {
+                map.removeLayer(buildingLayer);
+            }
+            map.removeLayer(markerCluster);
+            markerCluster.clearLayers();
+            currentGeoJSON = null;
+            updateBuildingInfo(null);
+            updateFileInfo('未選択');
+        }
+        
+        // 全体を表示
+        function fitBounds() {
+            if (buildingLayer && buildingLayer.getBounds().isValid()) {
+                map.fitBounds(buildingLayer.getBounds());
+            }
+        }
+        
+        // フルスクリーン切り替え
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        // ローディング表示
+        function showLoading(show) {
+            const loading = document.getElementById('loading');
+            loading.style.display = show ? 'block' : 'none';
+        }
+        
+        // 建物情報の更新
+        function updateBuildingInfo(geojsonData) {
+            const count = geojsonData ? geojsonData.features.length : 0;
+            document.getElementById('buildingCount').textContent = `建物数: ${count}`;
+        }
+        
+        // ファイル情報の更新
+        function updateFileInfo(filename) {
+            document.getElementById('fileInfo').textContent = `ファイル: ${filename}`;
+        }
+        
+        // 地図情報の更新
+        function updateMapInfo() {
+            const zoom = map.getZoom();
+            const center = map.getCenter();
+            document.getElementById('mapInfo').textContent = 
+                `ズーム: ${zoom} | 中心: ${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}`;
+        }
+        
+        // イベントリスナーの設定
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            
+            // ファイル選択イベント
+            document.getElementById('geojsonFile').addEventListener('change', function(e) {
+                loadGeoJSON(e.target.files[0]);
+            });
+            
+            // チェックボックスイベント
+            document.getElementById('showBuildings').addEventListener('change', toggleBuildings);
+            document.getElementById('showMarkers').addEventListener('change', toggleMarkers);
+        });
+    </script>
+</body>
+</html>
